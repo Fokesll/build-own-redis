@@ -2,6 +2,12 @@ import * as net from "node:net";
 import * as util from './util.ts'
 
 
+type KeyValueStore = {
+    [key: string]: string;
+};
+
+const kvStore: KeyValueStore = {};
+
 const CR = '\r';
 const LF = '\n';
 const CRLF = '\r\n';
@@ -30,6 +36,20 @@ server.on("connection", (connection: net.Socket) => {
                 break;
             case "ECHO":
                 connection.write(util.encodeBulk(cmd[1]));
+                break;
+
+            case "SET":
+                kvStore[cmd[1]] = cmd[2];
+                connection.write(util.encodeSimple("OK"));
+                break;
+
+            case "GET":
+                if (Object.hasOwn(kvStore, cmd[1])) {
+                    connection.write(util.encodeBulk(kvStore[cmd[1]]));
+
+                } else {
+                    connection.write(util.encodeNull());
+                }
                 break;
         }
 
