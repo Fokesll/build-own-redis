@@ -3,7 +3,10 @@ import * as util from './util.ts'
 
 
 type KeyValueStore = {
-    [key: string]: string;
+    [key: string]: {
+        value: string;
+        expiration?: Date;
+    }
 };
 
 const kvStore: KeyValueStore = {};
@@ -30,6 +33,9 @@ server.on("connection", (connection: net.Socket) => {
         console.log("DEBUG! received data:", data);
 
         const cmd = util.decodeResp(data.toString());
+
+        console.log("DEBUG! cmd:", cmd)
+
         switch (cmd[0].toUpperCase()) {
             case "PING":
                 connection.write(util.encodeSimple("PONG"));
@@ -39,18 +45,30 @@ server.on("connection", (connection: net.Socket) => {
                 break;
 
             case "SET":
-                kvStore[cmd[1]] = cmd[2];
+                kvStore[cmd[1]] = { value: cmd[2] };
+                if (cmd.length === 5 && cmd[3].toUpperCase() === 'PX') {
+                    const durationInMs = parseInt(cmd[4], 10);
+                    const time = new Date();
+                    time.setMilliseconds(time.getMilliseconds() + durationInMs);
+                    kvStore[cmd[1]].expiration = time;
+                }
                 connection.write(util.encodeSimple("OK"));
                 break;
 
             case "GET":
                 if (Object.hasOwn(kvStore, cmd[1])) {
-                    connection.write(util.encodeBulk(kvStore[cmd[1]]));
-
+                    const entry = kvStore[cmd[1]];
+                    const now = new Date();
+                    if ((entry.expiration ?? now) < now) {
+                        delete kvStore[cmd[1]];
+                        connection.write(util.encodeNull());
+                    }
+                    else {
+                        connection.write(util.encodeBulk(entry.value));
+                    }
                 } else {
                     connection.write(util.encodeNull());
                 }
-                break;
         }
 
 
