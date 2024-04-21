@@ -1,5 +1,8 @@
 {
   "devDependencies": {
     "@types/node": "^20.12.7"
+  },
+  "dependencies": {
+    "@std/path": "npm:@jsr/std__path@^0.223.0"
   }
 }

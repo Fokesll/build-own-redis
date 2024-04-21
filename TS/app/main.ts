@@ -1,91 +1,172 @@
-import * as net from "node:net";
-import * as util from './util.ts'
+import { iterateReader } from "@std/io/iterate-reader";
+import * as concepts from './concepts.ts'
+import * as utils from './util.ts'
 
 
-type KeyValueStore = {
-    [key: string]: {
-        value: string;
-        expiration?: Date;
+
+async function main() {
+    const cfg: concepts.ServerConfig = {
+        dir: "",
+        dbfilename: "",
+        port: 6379,
+        role: "master",
+        replicaOfHost: "",
+        replicaOfPort: 0,
+        replid:utils.genReplid(),
+        offset:0,
+    };
+
+    for (let i = 0; i < Deno.args.length; i++) {
+
+        switch (Deno.args[i]) {
+
+            case "--dir":
+                cfg.dir = Deno.args[i + 1];
+                i++;
+                break;
+            case "--dbfilename":
+                cfg.dbfilename = Deno.args[i + 1];
+                i++;
+                break;
+            case "--port":
+                cfg.port = parseInt(Deno.args[i + 1], 10);
+                break;
+
+            case "--replicaof":
+                cfg.role = "slave";
+                cfg.replicaOfHost = Deno.args[i+1];
+                cfg.replicaOfPort = parseInt(Deno.args[i+1], 10);
+                break;
+
+        }
+
     }
-};
 
-const kvStore: KeyValueStore = {};
+    const kvStore = utils.loadRdb(cfg)
 
-const CR = '\r';
-const LF = '\n';
-const CRLF = '\r\n';
+    await replicaHandShake(cfg,kvStore);
 
-const ClientTimeout = 3000;
-const ServerTimeout = 3000;
-
-const server: net.Server = net.createServer();
-
-server.on("connection", (connection: net.Socket) => {
-
-    console.log("DEBUG: connected");
-
-    connection.on("close", () => {
-        console.log("DEBUG: disconnected");
-        connection.end();
+    const listener = Deno.listen({
+        hostname: "127.0.0.1",
+        port: cfg.port,
+        transport: "tcp",
     });
 
-    connection.on("data", (data) => {
-        console.log("DEBUG! received data:", data);
+    for await (const connection of listener) {
+        handleConnection(connection, cfg, kvStore);
+    }
 
-        const cmd = util.decodeResp(data.toString());
+}
 
-        console.log("DEBUG! cmd:", cmd)
+
+async function handleConnection(
+    connection: Deno.TcpConn,
+    cfg: concepts.ServerConfig,
+    KvStore: concepts.KeyValueStore
+) {
+    console.log("DEBUG! connected");
+
+    for await (const data of iterateReader(connection)) {
+
+        const cmd = utils.decodeResp(data);
+
+        console.log("🚀 ~ forawait ~ cmd:", cmd)
 
         switch (cmd[0].toUpperCase()) {
+
             case "PING":
-                connection.write(util.encodeSimple("PONG"));
+                await connection.write(utils.encodeSimple("PONG"));
                 break;
+
             case "ECHO":
-                connection.write(util.encodeBulk(cmd[1]));
+                await connection.write(utils.encodeBulk(cmd[1]));
                 break;
 
             case "SET":
-                kvStore[cmd[1]] = { value: cmd[2] };
-                if (cmd.length === 5 && cmd[3].toUpperCase() === 'PX') {
+                KvStore[cmd[1]] = { value: cmd[2] };
+                if (cmd.length === 5 && cmd[3].toUpperCase() === "PX") {
                     const durationInMs = parseInt(cmd[4], 10);
                     const time = new Date();
                     time.setMilliseconds(time.getMilliseconds() + durationInMs);
-                    kvStore[cmd[1]].expiration = time;
+                    KvStore[cmd[1]].expiration = time;
                 }
-                connection.write(util.encodeSimple("OK"));
+                await connection.write(utils.encodeSimple("OK"));
                 break;
 
             case "GET":
-                if (Object.hasOwn(kvStore, cmd[1])) {
-                    const entry = kvStore[cmd[1]];
+                if (Object.hasOwn(KvStore, cmd[1])) {
+                    const entry = KvStore[cmd[1]];
                     const now = new Date();
+
                     if ((entry.expiration ?? now) < now) {
-                        delete kvStore[cmd[1]];
-                        connection.write(util.encodeNull());
+                        delete KvStore[cmd[1]];
+                        await connection.write(utils.encodeNull());
+                    } else {
+                        await connection.write(utils.encodeBulk(entry.value));
                     }
-                    else {
-                        connection.write(util.encodeBulk(entry.value));
+
+                } else {
+                    await connection.write(utils.encodeNull());
+                }
+                break;
+
+
+            case "KEYS":
+                await connection.write(utils.encodeArray(Object.keys(KvStore)));
+                break;
+
+            case "CONFIG":
+
+                if (cmd.length == 3 && cmd[1].toUpperCase() === "GET") {
+                    switch (cmd[2].toLowerCase()) {
+                        case "dir":
+                            await connection.write(utils.encodeArray(["dir", cfg.dir]));
+                            break;
+
+                        case "dbfilename":
+                            await connection.write(utils.encodeArray(["dbfilename", cfg.dbfilename]),);
+                            break;
+
+                        default:
+                            await connection.write(utils.encodeError("not found"));
+                            break;
                     }
                 } else {
-                    connection.write(util.encodeNull());
+                    await connection.write(utils.encodeError("action not implemented"));
                 }
+                break;
+
+            case "INFO":
+                await connection.write(utils.encodeBulk(
+                    `role:${cfg.role}\r\nmaster_replid:${cfg.replid}\r\nmaster_repl_offset:${cfg.offset}`,
+                  ),
+                );
+                break;
+
+            default:
+                await connection.write(utils.encodeError("command not implemented"));
+
         }
 
 
+    }
 
 
+    console.log("DEBUG! disconnected");
+}
 
 
+main();
+
+async function replicaHandShake(cfg: concepts.ServerConfig, kvStore:concepts.KeyValueStore){
+    if(cfg.role === 'master'){
+        return ;
+    }
+
+    const connection = await Deno.connect({
+        hostname: cfg.replicaOfHost,
+        port: cfg.replicaOfPort,
+        transport: "tcp",
     });
-    setTimeout(() => connection.end(), ClientTimeout);
-});
-
-server.on("error", (err) => {
-    throw err;
-});
-
-server.listen(6379, "127.0.0.1", () => {
-    console.log("listening connect");
-});
-
-setTimeout(() => server.close(), ServerTimeout)
+    await connection.write(utils.encodeArray(["ping"]));
+}
