@@ -12,8 +12,8 @@ async function main() {
         role: "master",
         replicaOfHost: "",
         replicaOfPort: 0,
-        replid:utils.genReplid(),
-        offset:0,
+        replid: utils.genReplid(),
+        offset: 0,
     };
 
     for (let i = 0; i < Deno.args.length; i++) {
@@ -31,11 +31,10 @@ async function main() {
             case "--port":
                 cfg.port = parseInt(Deno.args[i + 1], 10);
                 break;
-
             case "--replicaof":
                 cfg.role = "slave";
-                cfg.replicaOfHost = Deno.args[i+1];
-                cfg.replicaOfPort = parseInt(Deno.args[i+1], 10);
+                cfg.replicaOfHost = Deno.args[i + 1];
+                cfg.replicaOfPort = parseInt(Deno.args[i + 2], 10);
                 break;
 
         }
@@ -44,7 +43,7 @@ async function main() {
 
     const kvStore = utils.loadRdb(cfg)
 
-    await replicaHandShake(cfg,kvStore);
+    await replicaHandshake(cfg, kvStore);
 
     const listener = Deno.listen({
         hostname: "127.0.0.1",
@@ -139,7 +138,7 @@ async function handleConnection(
             case "INFO":
                 await connection.write(utils.encodeBulk(
                     `role:${cfg.role}\r\nmaster_replid:${cfg.replid}\r\nmaster_repl_offset:${cfg.offset}`,
-                  ),
+                ),
                 );
                 break;
 
@@ -156,11 +155,12 @@ async function handleConnection(
 }
 
 
-main();
+async function replicaHandshake(cfg: concepts.ServerConfig, kvStore: concepts.KeyValueStore) {
 
-async function replicaHandShake(cfg: concepts.ServerConfig, kvStore:concepts.KeyValueStore){
-    if(cfg.role === 'master'){
-        return ;
+    console.log("DEBUG! cfg", cfg)
+
+    if (cfg.role === "master") {
+        return;
     }
 
     const connection = await Deno.connect({
@@ -168,5 +168,23 @@ async function replicaHandShake(cfg: concepts.ServerConfig, kvStore:concepts.Key
         port: cfg.replicaOfPort,
         transport: "tcp",
     });
+
+    const buffer = new Uint8Array(1024);
     await connection.write(utils.encodeArray(["ping"]));
+    await connection.read(buffer);
+
+    await connection.write(utils.encodeArray(["replconf", "listening-port", cfg.port.toString()]));
+    await connection.read(buffer);
+    
+    await connection.write(utils.encodeArray(["replconf", "capa", "psync2"]));
+    await connection.read(buffer);
+
+    await connection.write(utils.encodeArray(["psync", "?", "-1"]));
+    await connection.read(buffer);
+
 }
+
+main();
+
+
+//
