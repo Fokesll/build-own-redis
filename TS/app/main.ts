@@ -142,6 +142,16 @@ async function handleConnection(
                 );
                 break;
 
+            case "REPLCONF":
+                await connection.write(utils.encodeBulk("OK"));
+                break;
+
+            case "PSYNC":
+                await connection.write(
+                    utils.encodeSimple(`FULLRESYNC ${cfg.replid} ${cfg.offset}`)
+                );
+                break;
+
             default:
                 await connection.write(utils.encodeError("command not implemented"));
 
@@ -175,7 +185,7 @@ async function replicaHandshake(cfg: concepts.ServerConfig, kvStore: concepts.Ke
 
     await connection.write(utils.encodeArray(["replconf", "listening-port", cfg.port.toString()]));
     await connection.read(buffer);
-    
+
     await connection.write(utils.encodeArray(["replconf", "capa", "psync2"]));
     await connection.read(buffer);
 
