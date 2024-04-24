@@ -1,8 +1,13 @@
 import { iterateReader } from "@std/io/iterate-reader";
+import * as base64 from "jsr:@std/encoding/base64";
 import * as concepts from './concepts.ts'
 import * as utils from './util.ts'
 
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const strToBytes = encoder.encode.bind(encoder);
+const bytesToStr = decoder.decode.bind(decoder);
 
 async function main() {
     const cfg: concepts.ServerConfig = {
@@ -150,6 +155,11 @@ async function handleConnection(
                 await connection.write(
                     utils.encodeSimple(`FULLRESYNC ${cfg.replid} ${cfg.offset}`)
                 );
+                const emptyRDB = base64.decodeBase64(
+                    "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog=="
+                );
+                await connection.write(strToBytes(`\$${emptyRDB.length}\r\n`));
+                await connection.write(emptyRDB);
                 break;
 
             default:
